@@ -4,18 +4,18 @@ pragma solidity ^0.8.20;
 contract CashbackRegistry {
     uint96 public immutable START_TIMESTAMP;
     uint96 public immutable DURATION;
-    address public immutable DEFAULT_PARTNER;
-    bytes32 constant SENTINEL = 0x0000000000000000000000000000000000000000000000000000000000000001;
-    mapping(address user => mapping(bytes32 partnerWithPeriod => bytes32 nextPartnerWithPeriod)) partnerChangeLog;
-    mapping(address partner => address nextPartner) partnerList;
+    bytes32 constant SENTINEL_32 = 0x0000000000000000000000000000000000000000000000000000000000000001;
+    address constant SENTINEL_20 = 0x0000000000000000000000000000000000000001;
+    mapping(address user => mapping(bytes32 partnerWithPeriod => bytes32 nextPartnerWithPeriod)) public
+        partnerChangeLog;
+    mapping(address partner => address nextPartner) public partnerList;
 
     event PartnerRegisteredForPeriod(address indexed user, address indexed partner, uint96 indexed period);
     event NewPartnerRegistered(address partner);
 
-    constructor(uint96 _startTimestamp, uint96 _duration, address _defaultPartner) {
+    constructor(uint96 _startTimestamp, uint96 _duration) {
         START_TIMESTAMP = _startTimestamp;
         DURATION = _duration;
-        DEFAULT_PARTNER = _defaultPartner;
     }
 
     function getCurrentPeriod() public view returns (uint96 period) {
@@ -27,10 +27,13 @@ contract CashbackRegistry {
     }
 
     function getPartnerAtPeriod(address user, uint96 period) public view returns (address partner) {
-        bytes32 lastPartnerWithPeriod = partnerChangeLog[user][SENTINEL];
-
+        bytes32 lastPartnerWithPeriod = partnerChangeLog[user][SENTINEL_32];
+        if (lastPartnerWithPeriod == bytes32(0)) {
+            // If no partner is found, return default partner;
+            return address(0);
+        }
         // In case: period > lastPeriod, loop until we find period <= period in partnerChangeLog
-        while (lastPartnerWithPeriod != SENTINEL) {
+        while (lastPartnerWithPeriod != SENTINEL_32) {
             address lastPartner;
             uint96 lastPeriod;
 
@@ -42,15 +45,12 @@ contract CashbackRegistry {
                 lastPartner := shr(96, lastPartnerWithPeriod)
             }
 
-            if (period <= lastPeriod) {
+            if (period >= lastPeriod) {
                 return lastPartner;
             } else {
                 lastPartnerWithPeriod = partnerChangeLog[user][lastPartnerWithPeriod];
             }
         }
-
-        // If no partner is found, return default partner;
-        return DEFAULT_PARTNER;
     }
 
     function getPartnerAtPeriod(address[] memory user, uint96 period) public view returns (address[] memory) {
@@ -90,32 +90,41 @@ contract CashbackRegistry {
     }
 
     function isPartnerRegistered(address partner) public view returns (bool) {
-        return partnerList[partner] == address(0);
+        return partnerList[partner] != address(0);
     }
 
     function registerPartner(address partner) external {
-        if (partnerList[partner] != address(bytes20(SENTINEL))) {
-            address lastPartner = partnerList[address(bytes20(SENTINEL))];
-            partnerList[address(bytes20(SENTINEL))] = partner;
+        require(partnerList[partner] == address(0));
+
+        if (partnerList[SENTINEL_20] == address(0)) {
+            partnerList[SENTINEL_20] = partner;
+            partnerList[partner] = SENTINEL_20;
+        } else {
+            address lastPartner = partnerList[SENTINEL_20];
+            partnerList[SENTINEL_20] = partner;
             partnerList[partner] = lastPartner;
         }
+
         emit NewPartnerRegistered(partner);
     }
 
     function unregisterPartner(address partnerToRemove) external {
-        require(partnerToRemove == msg.sender && partnerList[partnerToRemove] != address(bytes20(SENTINEL)));
+        require(partnerToRemove == msg.sender);
+        require(partnerList[partnerToRemove] != address(0));
+        require(partnerToRemove != SENTINEL_20);
+
         address nextPartner = partnerList[partnerToRemove];
-        address previousPartner = partnerList[address(bytes20(SENTINEL))];
-        // If partnerToRemove is the head
-        if (previousPartner == partnerToRemove) {
-            partnerList[address(bytes20(SENTINEL))] = nextPartner;
-            return;
-        }
+        address previousPartner = SENTINEL_20;
+
+        // Traverse to find the previous partner
         while (partnerList[previousPartner] != partnerToRemove) {
             previousPartner = partnerList[previousPartner];
+            require(previousPartner != address(0));
         }
-        // Found the previousPartner, point it tot he next partner;
+
+        // Remove the partner by linking previous to next
         partnerList[previousPartner] = nextPartner;
+        partnerList[partnerToRemove] = address(0);
     }
 
     function setPartnerNextPeriod(address partner) external {
@@ -124,16 +133,20 @@ contract CashbackRegistry {
         // bytes0: bytes19 = partner
         // bytes20: bytes31 = nextPeriod
         bytes32 partnerWithPeriod;
+
         assembly {
-            partnerWithPeriod := shl(partner, 96)
-            partnerWithPeriod := and(nextPeriod, 0xffffffffffffffffffffffff)
+            // partnerWithPeriod := shl(partner, 96)
+            partnerWithPeriod := shl(96, partner)
+            partnerWithPeriod := or(partnerWithPeriod, nextPeriod)
         }
 
-        bytes32 head = partnerChangeLog[user][SENTINEL];
+        bytes32 head = partnerChangeLog[user][SENTINEL_32];
         if (head == bytes32(0)) {
             // in the case of empty list
-            partnerChangeLog[user][SENTINEL] = partnerWithPeriod;
-            partnerChangeLog[user][partnerWithPeriod] = SENTINEL;
+            partnerChangeLog[user][SENTINEL_32] = partnerWithPeriod;
+            partnerChangeLog[user][partnerWithPeriod] = SENTINEL_32;
+
+            emit PartnerRegisteredForPeriod(user, partner, nextPeriod);
         } else {
             // find out if this period is the same as head
             uint96 lastPeriod;
@@ -146,17 +159,21 @@ contract CashbackRegistry {
                 // Extract high 20 bytes
                 lastPartner := shr(96, head)
             }
-
+            bytes32 lastPartnerWithPeriod = partnerChangeLog[user][SENTINEL_32];
+            bytes32 nextPartnerWithPeriod = partnerChangeLog[user][lastPartnerWithPeriod];
             // user in Period X, and wants to update Period {X+1}, but the partner for next period is already set
             // only update the partner address
+            // add new  head into linked list if not updated before
 
             if (lastPeriod == nextPeriod && lastPartner != partner) {
+                delete partnerChangeLog[user][head];
                 // update in the current head
-                partnerChangeLog[user][SENTINEL] = partnerWithPeriod;
+                partnerChangeLog[user][SENTINEL_32] = partnerWithPeriod;
+                partnerChangeLog[user][partnerWithPeriod] = nextPartnerWithPeriod;
             } else {
                 // add new  head into linked list if not updated before
-                partnerChangeLog[user][SENTINEL] = partnerWithPeriod;
-                partnerChangeLog[user][partnerWithPeriod] = head;
+                partnerChangeLog[user][SENTINEL_32] = partnerWithPeriod;
+                partnerChangeLog[user][partnerWithPeriod] = lastPartnerWithPeriod;
             }
 
             emit PartnerRegisteredForPeriod(user, partner, nextPeriod);
