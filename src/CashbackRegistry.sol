@@ -8,7 +8,6 @@ contract CashbackRegistry {
     bytes32 constant SENTINEL = 0x0000000000000000000000000000000000000000000000000000000000000001;
     mapping(address user => mapping(bytes32 partnerWithPeriod => bytes32 nextPartnerWithPeriod)) partnerChangeLog;
     mapping(address partner => address nextPartner) partnerList;
-    mapping(address partner => bool isRegistered) isPartnerREgistered;
 
     event PartnerRegisteredForPeriod(address indexed user, address indexed partner, uint96 indexed period);
     event NewPartnerRegistered(address partner);
@@ -61,6 +60,37 @@ contract CashbackRegistry {
             partners[i] = partner;
         }
         return partners;
+    }
+
+    function getUsersAtPeriodForPartner(address[] memory user, address partner, uint96 period)
+        public
+        view
+        returns (address[] memory)
+    {
+        uint256 userCount;
+        for (uint256 i; i < user.length; i++) {
+            address partnerFromPeriod = getPartnerAtPeriod(user[i], period);
+            if (partnerFromPeriod == partner) {
+                userCount++;
+            }
+        }
+
+        address[] memory users = new address[](userCount);
+
+        uint256 index = 0;
+        for (uint256 i = 0; i < user.length; i++) {
+            address partnerFromPeriod = getPartnerAtPeriod(user[i], period);
+            if (partnerFromPeriod == partner) {
+                users[index] = user[i];
+                index++;
+            }
+        }
+
+        return users;
+    }
+
+    function isPartnerRegistered(address partner) public view returns (bool) {
+        return partnerList[partner] == address(0);
     }
 
     function registerPartner(address partner) external {
