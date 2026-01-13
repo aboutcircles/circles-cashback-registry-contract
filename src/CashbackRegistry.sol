@@ -5,7 +5,6 @@ pragma solidity ^0.8.20;
 /// @notice Record user's cashback partner for given period
 /// @dev Information of partner and user's cashback partner is stored in linked list
 contract CashbackRegistry {
-
     uint96 public immutable START_TIMESTAMP;
     uint96 public immutable DURATION;
     bytes32 constant SENTINEL_32 = 0x0000000000000000000000000000000000000000000000000000000000000001;
