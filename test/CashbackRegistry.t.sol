@@ -38,7 +38,7 @@ contract CashbackRegistryTest is Test {
 
         vm.prank(alice);
 
-        registry.setPartnerNextPeriod(zeal);
+        registry.setPartnerForNextPeriod(zeal);
 
         assertEq(
             registry.partnerChangeLog(alice, SENTINEL_32),
@@ -54,7 +54,7 @@ contract CashbackRegistryTest is Test {
         vm.warp(block.timestamp + 8 * duration); // at period
         assertEq(registry.getCurrentPeriod(), 8);
         vm.prank(alice);
-        registry.setPartnerNextPeriod(gPay);
+        registry.setPartnerForNextPeriod(gPay);
 
         assertEq(registry.getPartnerAtPeriod(alice, 1), zeal);
         assertEq(registry.getPartnerAtPeriod(alice, 8), zeal);
@@ -63,7 +63,7 @@ contract CashbackRegistryTest is Test {
         // alice -> [{zeal, 1}, {gPay,9}]
         vm.prank(alice);
         // alice changes partner again
-        registry.setPartnerNextPeriod(gApp);
+        registry.setPartnerForNextPeriod(gApp);
         assertEq(registry.getPartnerAtPeriod(alice, 9), gApp);
         // alice -> [{zeal, 1}, {gApp,9}]
 
@@ -72,7 +72,7 @@ contract CashbackRegistryTest is Test {
         vm.warp(block.timestamp + duration);
         assertEq(registry.getCurrentPeriod(), 9);
         vm.prank(bob);
-        registry.setPartnerNextPeriod(gApp);
+        registry.setPartnerForNextPeriod(gApp);
         assertEq(registry.getPartnerAtPeriod(bob, 2), address(0)); // will return address(0) when user don't set the partner
         assertEq(registry.getPartnerAtPeriod(bob, 10), gApp);
 
