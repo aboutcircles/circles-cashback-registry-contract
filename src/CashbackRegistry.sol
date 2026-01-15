@@ -36,10 +36,23 @@ contract CashbackRegistry {
     );
     /// @notice Emitted when a new partner is registered in the contract.
     /// @param partner The new partner's address.
-    event NewPartnerRegistered(address partner);
+    event NewPartnerRegistered(address indexed partner);
+
+    /// @notice Emitted when a partner is unregistered from the contract.
+    /// @param partner The unregistered partner's address.
+    event PartnerUnregistered(address indexed partner);
+    
     /// @notice Error thrown when a function is called by an unauthorized address.
     /// @param caller The address that attempted to call the function.
     error InvalidCaller(address caller);
+
+    /// @notice Error thrown when a partner is not registered.
+    /// @param partner The address of the partner that is not registered.
+    error PartnerIsNotRegistered(address partner);
+
+    /// @notice Error thrown when an invalid partner address is provided.
+    /// @param partner The invalid partner address.
+    error InvalidPartner(address partner);
 
     /// @notice Modifier to restrict function access to the admin.
     modifier onlyAdmin() {
@@ -218,18 +231,19 @@ contract CashbackRegistry {
     /// @dev Pushes a partner into the linked list and emits a NewPartnerRegistered event.
     /// @param partner The address of the partner to register.
     function registerPartner(address partner) external onlyAdmin {
-        require(partnerList[partner] == address(0));
-        require(isPartnerRegistered(partner) == false);
-        require(partner != SENTINEL_20);
+        if (partner == address(0) || partner == SENTINEL_20 || isPartnerRegistered(partner)) {
+            revert InvalidPartner(partner);
+        }
 
+       
         if (partnerList[SENTINEL_20] == address(0)) {
-            partnerList[SENTINEL_20] = partner;
             partnerList[partner] = SENTINEL_20;
         } else {
             address lastPartner = partnerList[SENTINEL_20];
-            partnerList[SENTINEL_20] = partner;
             partnerList[partner] = lastPartner;
         }
+
+         partnerList[SENTINEL_20] = partner;
 
         emit NewPartnerRegistered(partner);
     }
@@ -238,8 +252,9 @@ contract CashbackRegistry {
     /// @dev Removes a partner from the linked list.
     /// @param partnerToRemove The address of the partner to unregister.
     function unregisterPartner(address partnerToRemove) external onlyAdmin {
-        require(partnerList[partnerToRemove] != address(0));
-        require(partnerToRemove != SENTINEL_20);
+        if (!isPartnerRegistered(partnerToRemove) || partnerToRemove == address(0) || partnerToRemove == SENTINEL_20) {
+            revert InvalidPartner(partnerToRemove);
+        }
 
         address nextPartner = partnerList[partnerToRemove];
         address previousPartner = SENTINEL_20;
@@ -247,12 +262,14 @@ contract CashbackRegistry {
         // Traverse to find the previous partner
         while (partnerList[previousPartner] != partnerToRemove) {
             previousPartner = partnerList[previousPartner];
-            require(previousPartner != address(0));
+            //  require(previousPartner != address(0));
         }
 
         // Remove the partner by linking previous to next
         partnerList[previousPartner] = nextPartner;
         partnerList[partnerToRemove] = address(0);
+
+        emit PartnerUnregistered(partnerToRemove);
     }
 
     /// @notice Sets the partner for a user for the next period.
@@ -261,20 +278,18 @@ contract CashbackRegistry {
     /// @param partner The partner's address.
     /// @return nextStartTimestamp The start timestamp of the period for which the partner is set.
     function setPartnerForNextPeriod(address user, address partner) external returns (uint256 nextStartTimestamp) {
+        if (msg.sender != ADMIN && msg.sender != user) {
+            revert InvalidCaller(msg.sender);
+        }
+        if (!isPartnerRegistered(partner)) revert PartnerIsNotRegistered(partner);
+
         uint96 updateForPeriod = msg.sender == ADMIN ? getCurrentPeriod() : getCurrentPeriod() + 1;
         nextStartTimestamp = START_TIMESTAMP + updateForPeriod * DURATION;
 
-        if (msg.sender != ADMIN && msg.sender != user) {
-            // allow admin to only bootstrap for user
-            revert InvalidCaller(msg.sender);
-        }
-
-        // bytes0: bytes19 = partner
-        // bytes20: bytes31 = nextPeriod
         bytes32 partnerWithPeriod = _getPartnerWithPeriod(partner, updateForPeriod);
 
         bytes32 head = partnerChangeLog[user][SENTINEL_32];
-        if (head == bytes32(0) && msg.sender != ADMIN) {
+        if (head == bytes32(0)) {
             // in the case of empty list
             partnerChangeLog[user][SENTINEL_32] = partnerWithPeriod;
             partnerChangeLog[user][partnerWithPeriod] = SENTINEL_32;
