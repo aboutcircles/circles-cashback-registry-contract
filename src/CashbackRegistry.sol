@@ -41,7 +41,7 @@ contract CashbackRegistry {
     /// @notice Emitted when a partner is unregistered from the contract.
     /// @param partner The unregistered partner's address.
     event PartnerUnregistered(address indexed partner);
-    
+
     /// @notice Error thrown when a function is called by an unauthorized address.
     /// @param caller The address that attempted to call the function.
     error InvalidCaller(address caller);
@@ -235,7 +235,6 @@ contract CashbackRegistry {
             revert InvalidPartner(partner);
         }
 
-       
         if (partnerList[SENTINEL_20] == address(0)) {
             partnerList[partner] = SENTINEL_20;
         } else {
@@ -243,7 +242,7 @@ contract CashbackRegistry {
             partnerList[partner] = lastPartner;
         }
 
-         partnerList[SENTINEL_20] = partner;
+        partnerList[SENTINEL_20] = partner;
 
         emit NewPartnerRegistered(partner);
     }
