@@ -46,6 +46,16 @@ contract CashbackRegistryTest is Test {
         vm.assume(periodX != 0);
         vm.assume(periodX < periodY);
         vm.assume(periodY < periodZ);
+
+        vm.startPrank(admin);
+        registry.registerPartner(zeal);
+        registry.registerPartner(gApp);
+        registry.registerPartner(gPay);
+        vm.stopPrank();
+        assertTrue(registry.isPartnerRegistered(zeal));
+        assertTrue(registry.isPartnerRegistered(gApp));
+        assertTrue(registry.isPartnerRegistered(gPay));
+
         //  vm.assume(periodZ * registry.DURATION() < type(uint96).max);
         uint96 currentPeriod = registry.getCurrentPeriod();
         // At period 0, alice add zeal as partner
@@ -172,6 +182,10 @@ contract CashbackRegistryTest is Test {
         vm.prank(admin);
         registry.unregisterPartner(partner1);
         assertFalse(registry.isPartnerRegistered(partner1));
+
+        vm.prank(admin);
+        registry.registerPartner(zeal);
+        assertTrue(registry.isPartnerRegistered(zeal));
 
         // admin can bootstrap user's partner list
         vm.prank(alice);
