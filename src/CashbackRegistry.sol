@@ -140,9 +140,9 @@ contract CashbackRegistry {
     /// @notice Gets the partners for a list of users at a specific period.
     /// @param user An array of user addresses.
     /// @param period The period number.
-    /// @return An array of partner addresses corresponding to the users.
-    function getPartnerAtPeriod(address[] memory user, uint96 period) public view returns (address[] memory) {
-        address[] memory partners = new address[](user.length);
+    /// @return partners An array of partner addresses corresponding to the users.
+    function getPartnerAtPeriod(address[] memory user, uint96 period) public view returns (address[] memory partners) {
+        partners = new address[](user.length);
         for (uint256 i; i < user.length; i++) {
             address partner = getPartnerAtPeriod(user[i], period);
             partners[i] = partner;
@@ -222,9 +222,10 @@ contract CashbackRegistry {
 
     /// @notice Checks if a partner is registered in the contract.
     /// @param partner The partner's address.
-    /// @return A boolean indicating whether the partner is registered.
-    function isPartnerRegistered(address partner) public view returns (bool) {
-        return partnerList[partner] != address(0);
+    /// @return isRegistered A boolean indicating whether the partner is registered.
+    function isPartnerRegistered(address partner) public view returns (bool isRegistered) {
+        isRegistered = partnerList[partner] != address(0);
+        return isRegistered;
     }
 
     /// @notice Registers a new partner.
