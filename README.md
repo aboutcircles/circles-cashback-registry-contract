@@ -25,7 +25,7 @@ graph TD
 
 2. Select the partner from a list of registered cashback partner / use default cashback partner from the login-in app
 
-3. When selected, call setPartnerForNextPeriod(address user, address partner) function on chain, where user is the GnosisPay address. This will emit the event PartnerRegisteredForPeriod(address indexed user, address indexed partner, uint256 indexed startTimestampOfPeriod).
+3. When selected, call `setPartnerForNextPeriod(address user, address partner)` function on chain, where user is the GnosisPay address. This will emit the event `PartnerRegisteredForPeriod(address indexed user, address indexed partner, uint256 indexed startTimestampOfPeriod)`.
 
 4. User can change partner as many times they can within a period. Cashback partner for the period X is determined by the end of the period X-1.
 
@@ -35,7 +35,7 @@ graph TD
 
 2. User click ${partner X} as default cashback partner
 
-3. When selected, call setPartnerForNextPeriod(address user, address partner X) function on chain
+3. When selected, call `setPartnerForNextPeriod(address user, address partner X)` function on chain
 
 ```mermaid
 graph TD
@@ -72,33 +72,33 @@ graph TD
 
 ## Edge case:
 
-1. If user has multiple accounts for the same Pay account(i.e. GnosisPay, GnosisApp), the partner will be chosen after user has explicitly call setPartnerForNextPeriod on the partner app. Partner should query getPartnerAtPeriod(address user, uint96 period) for the latest partner from the user.
+1. If user don't specify any partner, admin could set the default partner for user.
 
-2. If partner is unregistered and user has not updated to new partner, querying getUsersAtPeriodForPartneror getPartnerAtPeriod will return the unregistered partner if last partner chosen by user is the unregistered partner. User has to explicitly update to a new registered partner from the list.
+2. If user uses multiple partner apps with the same Pay account(i.e. GnosisPay, GnosisApp), the partner will be chosen after user has explicitly call setPartnerForNextPeriod on the partner app. Partner should query getPartnerAtPeriod(address user, uint96 period) for the latest partner from the user, or index PartnerRegisteredForPeriod event.
 
-3. If user don't specify any partner, admin could set the first partner for user.
+3. If partner is unregistered and user has not updated to new partner, querying `getUsersAtPeriodForPartneror` `getPartnerAtPeriod` will return the unregistered partner if last partner chosen by user is the unregistered partner. User has to explicitly update to a new registered partner from the list.
 
 ## Partner POV:
 
-1. Partner should be whitelisted through admin. Admin will call registerPartner on chain to update their address.
+1. Partner should be whitelisted through admin. Admin will call `registerPartner` function on chain to update their address.
 
-2. Partner can be unregistered by admin through unregisterPartner.
+2. Partner can be unregistered by admin through `unregisterPartner` function.
 
 3. To get eligible users for the cashback for period X:
 
-   1. call getPeriod(timestamp in X)
+   1. call `getPeriod(timestamp in X)`
 
-   2. call getUsersAtPeriodForPartner(address[] memory user, address partner, uint96 period) returns address[] user
+   2. call `getUsersAtPeriodForPartner(address[] memory user, address partner, uint96 period) returns (address[] user)`
 
 4. For example, partners K want to distribute cashback to eligible users at week Y, they need to know which partner the user chose at week Y-1 or before:
 
-5. Partner calls getPeriod(timestamp in week Y-1) returns period OR getCurrentPeriod - 1 if query for last week
+5. Partner calls `getPeriod(timestamp in week Y-1)` returns period OR `getCurrentPeriod` - 1 if query for last week
 
-6. Partner calls getUsersAtPeriodForPartner(address[] user, address partner K, uint96 period ) returns (address[] users).
+6. Partner calls `getUsersAtPeriodForPartner(address[] user, address partner K, uint96 period ) returns (address[] users)`.
 
 7. Partner proceeds with cashback distribution for users
 
-**Event indexing**: Partners should be advised to listen for PartnerRegisteredForPeriod events for the user-{partner,startTimestamp} relationship.
+**Event indexing**: Partners should be advised to listen for `PartnerRegisteredForPeriod` events for the user-{partner,startTimestamp} relationship.
 
 ```mermaid
 graph TD
@@ -204,11 +204,7 @@ subgraph Admin["👑 Admin Workflow"]
 
 1. `getPeriodAtTimestamp(uint256 timestamp) returns (uint96 period)`
 
-`period = timestamp < START_TIMESTAMP ? 0 : (uint96(timestamp) - START_TIMESTAMP) / DURATION;`
-
 2. `getCurrentPeriod() returns (uint96 period)`
-
-`period = (block.timestamp - START_TIMESTAMP) / DURATION`
 
 3. `getStartEndTimestampForPeriod(uint96 period) public view returns (uint256 startTimestamp, uint256 endTimestamp)`
 
@@ -240,8 +236,8 @@ subgraph Admin["👑 Admin Workflow"]
 
    1. Add the {partner+startPeriod} into partnerChangeLog linked list
 
-   2. Case 1: Called by user to register their first partner: Partner will be taken affect starting from next Period
-   3. Case 2: Called by admin to register user's first partner: Partner will be taken affect starting from the current period:
+   2. Case 1(bootstrap phase): Called by user to register their first partner: Partner will be taken affect starting from next Period
+   3. Case 2(bootstrap phase): Called by admin to register user's first partner: Partner will be taken affect starting from the current period:
    4. Case 3: If user has already chosen the partner for next period, but want to switch to a different partner: The head of the partnerChangeLog linked list is updated
    5. Case 4: User wants to update their partner for the next period: Add new partnerWithPeriod node into the partnerChangeLog linked list
 
