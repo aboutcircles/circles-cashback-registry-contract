@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: AGPL3.0
-pragma solidity ^0.8.20;
+// SPDX-License-Identifier: AGPL-3.0-only
+pragma solidity ^0.8.28;
 
 /// @title Cashback Registry
 /// @notice A registry to record a user's cashback partner for a given period.
@@ -46,18 +46,25 @@ contract CashbackRegistry {
     /// @param caller The address that attempted to call the function.
     error InvalidCaller(address caller);
 
+    /// @notice Error thrown when a function is called by non admin address.
+    error OnlyAdmin();
+
     /// @notice Error thrown when a partner is not registered.
     /// @param partner The address of the partner that is not registered.
     error PartnerIsNotRegistered(address partner);
 
+    /// @notice Error thrown when a partner is already registered.
+    /// @param partner The address of the partner that is already registered.
+    error PartnerAlreadyRegistered(address partner);
+
     /// @notice Error thrown when an invalid partner address is provided.
     /// @param partner The invalid partner address.
-    error InvalidPartner(address partner);
+    error InvalidAddress(address partner);
 
     /// @notice Modifier to restrict function access to the admin.
     modifier onlyAdmin() {
         if (msg.sender != ADMIN) {
-            revert InvalidCaller(msg.sender);
+            revert OnlyAdmin();
         }
         _;
     }
@@ -75,7 +82,7 @@ contract CashbackRegistry {
     /// @notice Gets the current period based on the block timestamp.
     /// @return period The current period number.
     function getCurrentPeriod() public view returns (uint96 period) {
-        period = (uint96(block.timestamp) - START_TIMESTAMP) / DURATION;
+        period = getPeriodAtTimestamp(uint96(block.timestamp));
     }
 
     /// @notice Gets the period number for a given timestamp.
@@ -106,13 +113,15 @@ contract CashbackRegistry {
     function getPartnerAtPeriod(address user, uint96 period) public view returns (address partner) {
         assembly {
             // Calculate storage slot of partnerChangeLog[user]
+            let userKey := mload(0x40)
             mstore(0, user)
             mstore(0x20, partnerChangeLog.slot)
-            mstore(0x20, keccak256(0, 0x40))
+            mstore(userKey, keccak256(0, 0x40)) // store the partnerChangeLog[user] slot at fmp
+            mstore(0x40, add(userKey, 0x20)) // update free memory pointer
             // Calculate second mapping slot of partnerChangeLog[user][SENTINEL]
             mstore(0, 0x01)
+            mstore(0x20, mload(userKey))
             mstore(0x20, keccak256(0, 0x40))
-            partner := 0
             let lastPartnerWithPeriod := sload(mload(0x20)) // Read partnerChangeLog[user][SENTINEL]
 
             for {} iszero(eq(lastPartnerWithPeriod, 0x01)) {} {
@@ -125,12 +134,10 @@ contract CashbackRegistry {
                     break
                 }
 
-                // else update to next node
-                mstore(0, user)
-                mstore(0x20, partnerChangeLog.slot)
-                mstore(0x20, keccak256(0, 0x40))
+                // // else update to next node
                 // calculate second mapping slot
                 mstore(0, lastPartnerWithPeriod)
+                mstore(0x20, mload(userKey)) // load the slot partnerChangeLog[user] from
                 mstore(0x20, keccak256(0, 0x40)) // second mapping of [user][lastPartnerWithPeriod]
                 lastPartnerWithPeriod := sload(mload(0x20))
             }
@@ -232,8 +239,12 @@ contract CashbackRegistry {
     /// @dev Pushes a partner into the linked list and emits a NewPartnerRegistered event.
     /// @param partner The address of the partner to register.
     function registerPartner(address partner) external onlyAdmin {
-        if (partner == address(0) || partner == SENTINEL_20 || isPartnerRegistered(partner)) {
-            revert InvalidPartner(partner);
+        if (partner == address(0) || partner == SENTINEL_20) {
+            revert InvalidAddress(partner);
+        }
+
+        if (isPartnerRegistered(partner)) {
+            revert PartnerAlreadyRegistered(partner);
         }
 
         if (partnerList[SENTINEL_20] == address(0)) {
@@ -252,8 +263,11 @@ contract CashbackRegistry {
     /// @dev Removes a partner from the linked list.
     /// @param partnerToRemove The address of the partner to unregister.
     function unregisterPartner(address partnerToRemove) external onlyAdmin {
-        if (!isPartnerRegistered(partnerToRemove) || partnerToRemove == address(0) || partnerToRemove == SENTINEL_20) {
-            revert InvalidPartner(partnerToRemove);
+        if (partnerToRemove == address(0) || partnerToRemove == SENTINEL_20) {
+            revert InvalidAddress(partnerToRemove);
+        }
+        if (!isPartnerRegistered(partnerToRemove)) {
+            revert PartnerIsNotRegistered(partnerToRemove);
         }
 
         address nextPartner = partnerList[partnerToRemove];
@@ -281,6 +295,8 @@ contract CashbackRegistry {
         if (msg.sender != ADMIN && msg.sender != user) {
             revert InvalidCaller(msg.sender);
         }
+
+        if (user == address(0)) revert InvalidAddress(user);
         if (!isPartnerRegistered(partner)) revert PartnerIsNotRegistered(partner);
 
         uint96 updateForPeriod = msg.sender == ADMIN ? getCurrentPeriod() : getCurrentPeriod() + 1;
