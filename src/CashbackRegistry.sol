@@ -7,15 +7,19 @@ pragma solidity ^0.8.28;
 /// in a linked list structure. It allows for querying a user's partner at any given period.
 contract CashbackRegistry {
     /// @notice The timestamp when the first period starts.
-    uint96 public immutable START_TIMESTAMP;
-    /// @notice The duration of each period in seconds.
-    uint96 public immutable DURATION;
+    uint96 public startTimestamp;
     /// @dev Sentinel value for the partner change log linked list.
     bytes32 constant SENTINEL_32 = 0x0000000000000000000000000000000000000000000000000000000000000001;
     /// @dev Sentinel value for the partner list linked list.
     address constant SENTINEL_20 = 0x0000000000000000000000000000000000000001;
     /// @notice The administrator of the contract.
     address public immutable ADMIN;
+    /// @notice The duration of each period in seconds.
+    uint96 public duration;
+
+    /// Record for the last duration changed
+    uint96 public lastDurationBeforeDurationChange;
+    uint96 public lastStartTimestampBeforeDurationChange;
 
     /// @notice Stores the historical partner changes for a given user.
     /// @dev mapping(user => mapping(partnerWithPeriod => nextPartnerWithPeriod))
@@ -41,6 +45,8 @@ contract CashbackRegistry {
     /// @notice Emitted when a partner is unregistered from the contract.
     /// @param partner The unregistered partner's address.
     event PartnerUnregistered(address indexed partner);
+
+    event DurationUpdated(uint96 indexed newDuration, uint96 indexed oldDuration);
 
     /// @notice Error thrown when a function is called by an unauthorized address.
     /// @param caller The address that attempted to call the function.
@@ -74,47 +80,57 @@ contract CashbackRegistry {
     /// @param _duration The duration of each period in seconds.
     /// @param _admin The address of the administrator.
     constructor(uint96 _startTimestamp, uint96 _duration, address _admin) {
-        START_TIMESTAMP = _startTimestamp;
-        DURATION = _duration;
+        startTimestamp = _startTimestamp;
+        duration = _duration;
         ADMIN = _admin;
     }
 
-    /// @notice Gets the current period based on the block timestamp.
-    /// @return period The current period number.
-    function getCurrentPeriod() public view returns (uint96 period) {
-        period = getPeriodAtTimestamp(uint96(block.timestamp));
-    }
-
-    /// @notice Gets the period number for a given timestamp.
-    /// @dev Need to consider when divided down. Each period X is defined by [START_TIMESTAMP + X*DURATION, START_TIMESTAMP + (X+1)*DURATION).
-    /// @param timestamp The timestamp to get the period for.
-    /// @return period The period number.
-    function getPeriodAtTimestamp(uint256 timestamp) public view returns (uint96 period) {
-        return timestamp < START_TIMESTAMP ? 0 : (uint96(timestamp) - START_TIMESTAMP) / DURATION;
-    }
-
-    /// @notice Given a period, return the start and end timestamp of the period.
-    /// @param period The period number.
-    /// @return startTimestamp The start timestamp of the period.
-    /// @return endTimestamp The end timestamp of the period.
-    function getStartEndTimestampForPeriod(uint96 period)
+    // [startTS, startTS + duration - 1] -> [startTS + duration, startTS + 2*duration - 1]
+    /// Given a timestamp, return the start and end timestamp of the period where the timestamp is in
+    function getPeriodAtTimestamp(uint96 timestamp)
         public
         view
-        returns (uint256 startTimestamp, uint256 endTimestamp)
+        returns (uint256 _startTimestamp, uint256 _endTimestamp)
     {
-        startTimestamp = START_TIMESTAMP + period * DURATION;
-        endTimestamp = START_TIMESTAMP + (period + 1) * DURATION;
+        // Use the previous startTimestamp and duration if the timestamp is less than startTiemstamp
+        (uint96 startTimestampForDuration, uint96 durationForCalculation) = timestamp < startTimestamp
+            ? (lastStartTimestampBeforeDurationChange, lastDurationBeforeDurationChange)
+            : (startTimestamp, duration);
+
+        (, uint256 r) = getQuotientResidue((timestamp - startTimestampForDuration), durationForCalculation);
+
+        if (r == 0) {
+            // when timestamp is at divisible, then it is at startTimestamp
+            _startTimestamp = timestamp;
+            _endTimestamp = timestamp + durationForCalculation - 1;
+        } else {
+            // if not divisible, timestamp is can either 1) be in the middle, or 2) at the end timestamp
+            _startTimestamp = timestamp - r;
+            _endTimestamp = _startTimestamp + durationForCalculation - 1;
+        }
+    }
+
+    function getQuotientResidue(uint256 number, uint256 d) internal pure returns (uint256 quotient, uint256 remainder) {
+        quotient = number / d;
+        remainder = number == (quotient * d) ? 0 : number - (quotient * d);
+    }
+
+    /// @notice Gets the current period based on the block timestamp.
+    /// @return _startTimestamp The current period's startTimestamp.
+    /// @return _endTimestamp The current period's endTimestamp
+    function getCurrentPeriod() public view returns (uint256 _startTimestamp, uint256 _endTimestamp) {
+        (_startTimestamp, _endTimestamp) = getPeriodAtTimestamp(uint96(block.timestamp));
     }
 
     /// @notice Gets the partner for a given user at a specific period.
-    /// @param user The user's address.
-    /// @param period The period number.
+    /// @param _user The user's address.
+    /// @param _startTimestamp The period number.
     /// @return partner The partner's address.
-    function getPartnerAtPeriod(address user, uint96 period) public view returns (address partner) {
+    function getPartnerAtPeriod(address _user, uint96 _startTimestamp) public view returns (address partner) {
         assembly {
             // Calculate storage slot of partnerChangeLog[user]
             let userKey := mload(0x40)
-            mstore(0, user)
+            mstore(0, _user)
             mstore(0x20, partnerChangeLog.slot)
             mstore(userKey, keccak256(0, 0x40)) // store the partnerChangeLog[user] slot at fmp
             mstore(0x40, add(userKey, 0x20)) // update free memory pointer
@@ -122,24 +138,24 @@ contract CashbackRegistry {
             mstore(0, 0x01)
             mstore(0x20, mload(userKey))
             mstore(0x20, keccak256(0, 0x40))
-            let lastPartnerWithPeriod := sload(mload(0x20)) // Read partnerChangeLog[user][SENTINEL]
+            let lastPartnerWithStartTimestamp := sload(mload(0x20)) // Read partnerChangeLog[user][SENTINEL]
 
-            for {} iszero(eq(lastPartnerWithPeriod, 0x01)) {} {
-                let lastPeriod := and(lastPartnerWithPeriod, 0xffffffffffffffffffffffff)
-                let lastPartner := shr(96, lastPartnerWithPeriod)
+            for {} iszero(eq(lastPartnerWithStartTimestamp, 0x01)) {} {
+                let lastStartTimestamp := and(lastPartnerWithStartTimestamp, 0xffffffffffffffffffffffff)
+                let lastPartner := shr(96, lastPartnerWithStartTimestamp)
 
-                // if period >= lastPeriod
-                if iszero(lt(period, lastPeriod)) {
+                // if _startTimestamp >= lastStartTimestamp
+                if iszero(lt(_startTimestamp, lastStartTimestamp)) {
                     partner := lastPartner
                     break
                 }
 
                 // // else update to next node
                 // calculate second mapping slot
-                mstore(0, lastPartnerWithPeriod)
+                mstore(0, lastPartnerWithStartTimestamp)
                 mstore(0x20, mload(userKey)) // load the slot partnerChangeLog[user] from
-                mstore(0x20, keccak256(0, 0x40)) // second mapping of [user][lastPartnerWithPeriod]
-                lastPartnerWithPeriod := sload(mload(0x20))
+                mstore(0x20, keccak256(0, 0x40)) // second mapping of [user][lastPartnerWithStartTimestamp]
+                lastPartnerWithStartTimestamp := sload(mload(0x20))
             }
         }
     }
@@ -157,22 +173,22 @@ contract CashbackRegistry {
         return partners;
     }
 
-    /// @notice Filters a list of users to find those associated with a specific partner at a given period.
-    /// @param user An array of user addresses to filter.
-    /// @param partner The partner to filter by.
-    /// @param period The period number.
+    /// @notice Filters a list of users to find those associated with a specific partner at a given timestamp.
+    /// @param _user An array of user addresses to filter.
+    /// @param _partner The partner to filter by.
+    /// @param _timestamp The period number.
     /// @return users An array of user addresses that have the specified partner for the given period.
-    function getUsersAtPeriodForPartner(address[] memory user, address partner, uint96 period)
+    function getUsersAtPeriodForPartner(address[] memory _user, address _partner, uint96 _timestamp)
         public
         view
         returns (address[] memory users)
     {
         assembly {
-            let userArrLen := mload(user) // return the size of the user array
-            let userArrElementLocation := add(user, 0x20)
+            let userArrLen := mload(_user) // return the size of the user array
+            let userArrElementLocation := add(_user, 0x20)
             let userElement
-            let lastPartnerWithPeriod
-            let lastPeriod
+            let lastPartnerWithStartTimestamp
+            let lastStartTimestampInList
             let lastPartner
             let end := add(userArrElementLocation, mul(userArrLen, 0x20))
 
@@ -191,14 +207,14 @@ contract CashbackRegistry {
                 mstore(0, 0x01)
                 mstore(0x20, keccak256(0, 0x40))
 
-                lastPartnerWithPeriod := sload(mload(0x20)) // read partnerChangeLog[user][SENTINEL]
+                lastPartnerWithStartTimestamp := sload(mload(0x20)) // read partnerChangeLog[user][SENTINEL]
 
-                for {} iszero(eq(lastPartnerWithPeriod, 0x01)) {} {
-                    lastPeriod := and(lastPartnerWithPeriod, 0xffffffffffffffffffffffff)
-                    lastPartner := shr(96, lastPartnerWithPeriod)
+                for {} iszero(eq(lastPartnerWithStartTimestamp, 0x01)) {} {
+                    lastStartTimestampInList := and(lastPartnerWithStartTimestamp, 0xffffffffffffffffffffffff)
+                    lastPartner := shr(96, lastPartnerWithStartTimestamp)
 
-                    if and(iszero(lt(period, lastPeriod)), eq(partner, lastPartner)) {
-                        // if period >= lastPeriod && partner == lastPartner
+                    if and(iszero(lt(_timestamp, lastStartTimestampInList)), eq(_partner, lastPartner)) {
+                        // if timestamp >= lastStartTimestamp && partner == lastPartner
                         // push the user into the new users array
 
                         // Increase free memory pointer by 0x20 for the new element
@@ -214,12 +230,12 @@ contract CashbackRegistry {
                     mstore(0x20, partnerChangeLog.slot)
                     mstore(0x20, keccak256(0, 0x40))
 
-                    mstore(0, lastPartnerWithPeriod)
+                    mstore(0, lastPartnerWithStartTimestamp)
                     mstore(0x20, keccak256(0, 0x40))
-                    lastPartnerWithPeriod := sload(mload(0x20)) // read partnerChangeLog[user][lastPartnerWithPeriod]
+                    lastPartnerWithStartTimestamp := sload(mload(0x20)) // read partnerChangeLog[user][lastPartnerWithStartTimestamp]
 
                     // Stop when it reaches partnerChangeLog[user][SENTINEL]
-                    if or(eq(lastPartnerWithPeriod, 0x01), iszero(lastPartnerWithPeriod)) {
+                    if or(eq(lastPartnerWithStartTimestamp, 0x01), iszero(lastPartnerWithStartTimestamp)) {
                         break
                     }
                 }
@@ -276,7 +292,6 @@ contract CashbackRegistry {
         // Traverse to find the previous partner
         while (partnerList[previousPartner] != partnerToRemove) {
             previousPartner = partnerList[previousPartner];
-            //  require(previousPartner != address(0));
         }
 
         // Remove the partner by linking previous to next
@@ -288,73 +303,94 @@ contract CashbackRegistry {
 
     /// @notice Sets the partner for a user for the next period.
     /// @dev Can be called by the user to set their own partner for the next period, or by the admin for the current period.
-    /// @param user The user's address.
-    /// @param partner The partner's address.
+    /// @param _user The user's address.
+    /// @param _partner The partner's address.
     /// @return nextStartTimestamp The start timestamp of the period for which the partner is set.
-    function setPartnerForNextPeriod(address user, address partner) external returns (uint256 nextStartTimestamp) {
-        if (msg.sender != ADMIN && msg.sender != user) {
+    function setPartnerForNextPeriod(address _user, address _partner) external returns (uint256 nextStartTimestamp) {
+        if (msg.sender != ADMIN && msg.sender != _user) {
             revert InvalidCaller(msg.sender);
         }
 
-        if (user == address(0)) revert InvalidAddress(user);
-        if (!isPartnerRegistered(partner)) revert PartnerIsNotRegistered(partner);
+        if (_user == address(0)) revert InvalidAddress(_user);
+        if (!isPartnerRegistered(_partner)) revert PartnerIsNotRegistered(_partner);
 
-        uint96 updateForPeriod = msg.sender == ADMIN ? getCurrentPeriod() : getCurrentPeriod() + 1;
-        nextStartTimestamp = START_TIMESTAMP + updateForPeriod * DURATION;
+        (uint256 _startTimestamp, uint256 _endTimestamp) = getCurrentPeriod();
+        _startTimestamp = msg.sender == ADMIN ? _startTimestamp : _startTimestamp + duration;
+        _endTimestamp = msg.sender == ADMIN ? _endTimestamp : startTimestamp + duration - 1;
 
-        bytes32 partnerWithPeriod = _getPartnerWithPeriod(partner, updateForPeriod);
+        // store the startTimestamp of the period
+        bytes32 partnerWithStartTimestamp = _getPartnerWithStartTimestamp(_partner, uint96(startTimestamp));
 
-        bytes32 head = partnerChangeLog[user][SENTINEL_32];
+        bytes32 head = partnerChangeLog[_user][SENTINEL_32];
         if (head == bytes32(0)) {
             // in the case of empty list
-            partnerChangeLog[user][SENTINEL_32] = partnerWithPeriod;
-            partnerChangeLog[user][partnerWithPeriod] = SENTINEL_32;
+            partnerChangeLog[_user][SENTINEL_32] = partnerWithStartTimestamp;
+            partnerChangeLog[_user][partnerWithStartTimestamp] = SENTINEL_32;
         } else {
             // find out if this period is the same as head
-            (address lastPartner, uint96 lastPeriod) = _getPartnerAndPeriod(head);
+            (address lastPartner, uint96 lastStartTs) = _getPartnerAndStartTimestamp(head);
 
-            bytes32 lastPartnerWithPeriod = head;
-            bytes32 nextPartnerWithPeriod = partnerChangeLog[user][lastPartnerWithPeriod];
-            if (lastPartner == partner) return 0; // No change when partner is the same
-            if (lastPeriod == updateForPeriod && lastPartner != partner) {
+            bytes32 lastPartnerWithStartTimestamp = head;
+            bytes32 nextPartnerWithStartTimestamp = partnerChangeLog[_user][lastPartnerWithStartTimestamp];
+            if (lastPartner == _partner) return 0; // No change when partner is the same
+            if (lastStartTs == startTimestamp && lastPartner != _partner) {
                 // user in Period X, and wants to update Period {X+1}, but the partner for next period is already set
                 // only update the partner address
-                delete partnerChangeLog[user][head];
+                delete partnerChangeLog[_user][head];
                 // update in the current head
-                partnerChangeLog[user][partnerWithPeriod] = nextPartnerWithPeriod;
+                partnerChangeLog[_user][partnerWithStartTimestamp] = nextPartnerWithStartTimestamp;
             } else {
                 // add new  head into linked list if not updated before
-                partnerChangeLog[user][partnerWithPeriod] = lastPartnerWithPeriod;
+                partnerChangeLog[_user][partnerWithStartTimestamp] = lastPartnerWithStartTimestamp;
             }
-            partnerChangeLog[user][SENTINEL_32] = partnerWithPeriod;
+            partnerChangeLog[_user][SENTINEL_32] = partnerWithStartTimestamp;
         }
 
-        emit PartnerRegisteredForPeriod(user, partner, nextStartTimestamp);
-        return nextStartTimestamp;
+        emit PartnerRegisteredForPeriod(_user, _partner, startTimestamp);
+        return startTimestamp;
+    }
+
+    function setDuration(uint96 _duration) external onlyAdmin {
+        lastDurationBeforeDurationChange = duration;
+        lastStartTimestampBeforeDurationChange = startTimestamp;
+
+        duration = _duration;
+        (, uint256 _endTimestamp) = getCurrentPeriod();
+
+        startTimestamp = uint96(_endTimestamp + 1); // the next start timestamp is the endTimestamp of the last duration + 1
+        emit DurationUpdated(duration, lastDurationBeforeDurationChange);
     }
 
     /// @notice Decodes a bytes32 value into a partner address and a period number.
-    /// @param partnerWithPeriod The encoded bytes32 value.
+    /// @param partnerWithStartTimestamp The encoded bytes32 value.
     /// @return partner The decoded partner address.
-    /// @return period The decoded period number.
-    function _getPartnerAndPeriod(bytes32 partnerWithPeriod) internal pure returns (address partner, uint96 period) {
+    /// @return startTs The decoded period number.
+    function _getPartnerAndStartTimestamp(bytes32 partnerWithStartTimestamp)
+        internal
+        pure
+        returns (address partner, uint96 startTs)
+    {
         assembly {
             // Extract low 12 bytes (uint96)
-            period := and(partnerWithPeriod, 0xffffffffffffffffffffffff)
+            startTs := and(partnerWithStartTimestamp, 0xffffffffffffffffffffffff)
 
             // Extract high 20 bytes
-            partner := shr(96, partnerWithPeriod)
+            partner := shr(96, partnerWithStartTimestamp)
         }
     }
 
     /// @notice Encodes a partner address and a period number into a bytes32 value.
     /// @param partner The partner address.
-    /// @param period The period number.
-    /// @return partnerWithPeriod The encoded bytes32 value.
-    function _getPartnerWithPeriod(address partner, uint96 period) internal pure returns (bytes32 partnerWithPeriod) {
+    /// @param startTs The start timestamp.
+    /// @return partnerWithStartTimestamp The encoded bytes32 value.
+    function _getPartnerWithStartTimestamp(address partner, uint96 startTs)
+        internal
+        pure
+        returns (bytes32 partnerWithStartTimestamp)
+    {
         assembly {
-            partnerWithPeriod := shl(96, partner)
-            partnerWithPeriod := or(partnerWithPeriod, period)
+            partnerWithStartTimestamp := shl(96, partner)
+            partnerWithStartTimestamp := or(partnerWithStartTimestamp, startTs)
         }
     }
 }
