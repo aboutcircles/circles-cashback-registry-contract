@@ -101,23 +101,17 @@ contract CashbackRegistry {
 
         if (r == 0) {
             // when timestamp is at divisible, then it is at startTimestamp
-
-            _startTimestamp = timestamp;
-            _endTimestamp = timestamp + durationForCalculation - 1;
+            unchecked {
+                _startTimestamp = timestamp;
+                _endTimestamp = timestamp + durationForCalculation - 1;
+            }
         } else {
-            // if not divisible, timestamp is can either 1) be in the middle, or 2) at the end timestamp
-            _startTimestamp = timestamp - r;
-            _endTimestamp = _startTimestamp + durationForCalculation - 1;
+            unchecked {
+                // if not divisible, timestamp is can either 1) be in the middle, or 2) at the end timestamp
+                _startTimestamp = timestamp - r;
+                _endTimestamp = _startTimestamp + durationForCalculation - 1;
+            }
         }
-    }
-
-    function _getQuotientResidue(uint256 number, uint256 d)
-        internal
-        pure
-        returns (uint256 quotient, uint256 remainder)
-    {
-        quotient = number / d;
-        remainder = number == (quotient * d) ? 0 : number - (quotient * d);
     }
 
     /// @notice Gets the current period based on the block timestamp.
@@ -131,52 +125,52 @@ contract CashbackRegistry {
     /// @param _user The user's address.
     /// @param _timestamp The period number.
     /// @return partner The partner's address.
-    function getSinglePartnerAtTimestamp(address _user, uint96 _timestamp) public view returns (address partner) {
+    function getPartnerAtTimestamp(address _user, uint96 _timestamp) public view returns (address partner) {
         assembly {
             // Calculate storage slot of partnerChangeLog[user]
             let userKey := mload(0x40)
             mstore(0, _user)
             mstore(0x20, partnerChangeLog.slot)
-            mstore(userKey, keccak256(0, 0x40)) // store the partnerChangeLog[user] slot at fmp
+            mstore(userKey, keccak256(0, 0x40)) // store the partnerChangeLog[_user] slot at fmp
             mstore(0x40, add(userKey, 0x20)) // update free memory pointer
-            // Calculate second mapping slot of partnerChangeLog[user][SENTINEL]
+            // Calculate second mapping slot of partnerChangeLog[_user][SENTINEL]
             mstore(0, 0x01)
             mstore(0x20, mload(userKey))
             mstore(0x20, keccak256(0, 0x40))
-            let lastPartnerWithStartTimestamp := sload(mload(0x20)) // Read partnerChangeLog[user][SENTINEL]
+            let lastPartnerWithStartTimestamp := sload(mload(0x20)) // Read partnerChangeLog[_user][SENTINEL]
 
             for {} iszero(eq(lastPartnerWithStartTimestamp, 0x01)) {} {
-                let lastStartTimestamp := and(lastPartnerWithStartTimestamp, 0xffffffffffffffffffffffff)
-                let lastPartner := shr(96, lastPartnerWithStartTimestamp)
+                let lastStartTimestampInList := and(lastPartnerWithStartTimestamp, 0xffffffffffffffffffffffff)
+                let lastPartnerInList := shr(96, lastPartnerWithStartTimestamp)
 
-                // if _timestamp >= lastStartTimestamp
-                if iszero(lt(_timestamp, lastStartTimestamp)) {
-                    partner := lastPartner
+                // if _timestamp >= lastStartTimestampInList
+                if iszero(lt(_timestamp, lastStartTimestampInList)) {
+                    partner := lastPartnerInList
                     break
                 }
 
                 // // else update to next node
                 // calculate second mapping slot
                 mstore(0, lastPartnerWithStartTimestamp)
-                mstore(0x20, mload(userKey)) // load the slot partnerChangeLog[user] from
-                mstore(0x20, keccak256(0, 0x40)) // second mapping of [user][lastPartnerWithStartTimestamp]
+                mstore(0x20, mload(userKey)) // load the slot partnerChangeLog[_user] from
+                mstore(0x20, keccak256(0, 0x40)) // second mapping of [_user][lastPartnerWithStartTimestamp]
                 lastPartnerWithStartTimestamp := sload(mload(0x20))
             }
         }
     }
 
     /// @notice Gets the partners for a list of users at a specific period.
-    /// @param user An array of user addresses.
+    /// @param _user An array of user addresses.
     /// @param _timestamp The _timestamp number.
     /// @return partners An array of partner addresses corresponding to the users.
-    function getPartnerAtTimestamp(address[] memory user, uint96 _timestamp)
+    function getPartnerAtTimestamp(address[] memory _user, uint96 _timestamp)
         public
         view
         returns (address[] memory partners)
     {
-        partners = new address[](user.length);
-        for (uint256 i; i < user.length; i++) {
-            address partner = getSinglePartnerAtTimestamp(user[i], _timestamp);
+        partners = new address[](_user.length);
+        for (uint256 i; i < _user.length; i++) {
+            address partner = getPartnerAtTimestamp(_user[i], _timestamp);
             partners[i] = partner;
         }
         return partners;
@@ -187,7 +181,7 @@ contract CashbackRegistry {
     /// @param _partner The partner to filter by.
     /// @param _timestamp The period number.
     /// @return users An array of user addresses that have the specified partner for the given period.
-    function getUsersAtPeriodForPartner(address[] memory _user, address _partner, uint96 _timestamp)
+    function getUsersAtTimestampForPartner(address[] memory _user, address _partner, uint96 _timestamp)
         public
         view
         returns (address[] memory users)
@@ -198,7 +192,7 @@ contract CashbackRegistry {
             let userElement
             let lastPartnerWithStartTimestamp
             let lastStartTimestampInList
-            let lastPartner
+            let lastPartnerInList
             let end := add(userArrElementLocation, mul(userArrLen, 0x20))
 
             users := mload(0x40)
@@ -220,10 +214,10 @@ contract CashbackRegistry {
 
                 for {} iszero(eq(lastPartnerWithStartTimestamp, 0x01)) {} {
                     lastStartTimestampInList := and(lastPartnerWithStartTimestamp, 0xffffffffffffffffffffffff)
-                    lastPartner := shr(96, lastPartnerWithStartTimestamp)
+                    lastPartnerInList := shr(96, lastPartnerWithStartTimestamp)
 
-                    if and(iszero(lt(_timestamp, lastStartTimestampInList)), eq(_partner, lastPartner)) {
-                        // if timestamp >= lastStartTimestamp && partner == lastPartner
+                    if and(iszero(lt(_timestamp, lastStartTimestampInList)), eq(_partner, lastPartnerInList)) {
+                        // if _timestamp >= lastStartTimestampInList && _partner == lastPartnerInList
                         // push the user into the new users array
 
                         // Increase free memory pointer by 0x20 for the new element
@@ -324,6 +318,7 @@ contract CashbackRegistry {
         if (!isPartnerRegistered(_partner)) revert PartnerIsNotRegistered(_partner);
 
         (uint256 _startTimestamp, uint256 _endTimestamp) = getCurrentPeriod();
+        // Update this period if msg.sender == ADMIN, if not, update next period
         _startTimestamp = msg.sender == ADMIN ? _startTimestamp : _startTimestamp + duration;
         _endTimestamp = msg.sender == ADMIN ? _endTimestamp : startTimestamp + duration - 1;
 
@@ -365,9 +360,9 @@ contract CashbackRegistry {
 
         (, uint256 _endTimestamp) = getCurrentPeriod();
 
-        startTimestamp = uint96(_endTimestamp + 1); // the next start timestamp is the endTimestamp of the last duration + 1
-
+        startTimestamp = uint96(_endTimestamp + 1);
         duration = _duration;
+
         emit DurationUpdated(duration, lastDurationBeforeDurationChange);
     }
 
@@ -402,5 +397,14 @@ contract CashbackRegistry {
             partnerWithStartTimestamp := shl(96, partner)
             partnerWithStartTimestamp := or(partnerWithStartTimestamp, startTs)
         }
+    }
+
+    function _getQuotientResidue(uint256 number, uint256 d)
+        internal
+        pure
+        returns (uint256 quotient, uint256 remainder)
+    {
+        quotient = number / d;
+        remainder = number == (quotient * d) ? 0 : number - (quotient * d);
     }
 }

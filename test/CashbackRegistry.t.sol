@@ -14,12 +14,12 @@ contract CashbackRegistryTest is Test {
     address gApp = makeAddr("gApp");
     address gPay = makeAddr("gPay");
     address admin = makeAddr("admin");
-    uint96 duration = 7;
+    uint96 initialDuration = 7;
     bytes32 constant SENTINEL_32 = 0x0000000000000000000000000000000000000000000000000000000000000001;
     address constant SENTINEL_20 = 0x0000000000000000000000000000000000000001;
 
     function setUp() public {
-        registry = new CashbackRegistry(startTimestampAtPeriod0, duration, admin);
+        registry = new CashbackRegistry(startTimestampAtPeriod0, initialDuration, admin);
     }
 
     // Test add partner, view partner at the correct period
@@ -74,7 +74,7 @@ contract CashbackRegistryTest is Test {
         vm.assume(startTsX < startTsY);
         vm.assume(startTsY < startTsZ);
         vm.assume(newDuration > 1);
-        (uint256 startTimestampY, uint256 endTimestampY) = registry.getPeriodAtTimestamp(startTsY);
+        (, uint256 endTimestampY) = registry.getPeriodAtTimestamp(startTsY);
         vm.assume(startTsZ > endTimestampY);
 
         vm.startPrank(admin);
@@ -89,15 +89,15 @@ contract CashbackRegistryTest is Test {
         // The start and end timestamp of the first period
         (uint256 startTs, uint256 endTs) = registry.getCurrentPeriod();
         // At period 0, alice add zeal as partner
-        assertEq(registry.getSinglePartnerAtTimestamp(alice, uint96(startTs - 1)), address(0)); // return default partner if not set
+        assertEq(registry.getPartnerAtTimestamp(alice, uint96(startTs - 1)), address(0)); // return default partner if not set
         vm.prank(alice);
         uint256 nextStartTimestamp = registry.setPartnerForNextPeriod(alice, zeal);
-        assertEq(nextStartTimestamp, block.timestamp + duration);
+        assertEq(nextStartTimestamp, block.timestamp + initialDuration);
 
-        assertEq(registry.getSinglePartnerAtTimestamp(alice, uint96(endTs + 1)), zeal);
+        assertEq(registry.getPartnerAtTimestamp(alice, uint96(endTs + 1)), zeal);
 
         // registry assumes the future partner is the same
-        assertEq(registry.getSinglePartnerAtTimestamp(alice, 100000), zeal);
+        assertEq(registry.getPartnerAtTimestamp(alice, 100000), zeal);
 
         // alice -> {zeal, 8}
 
@@ -109,39 +109,38 @@ contract CashbackRegistryTest is Test {
         // if startTsX less than first period
         if (startTsX <= endTs) {
             //only change the head, because alice has already add zeal for the next period
-            assertEq(registry.getSinglePartnerAtTimestamp(alice, startTsX), address(0));
-            assertEq(registry.getSinglePartnerAtTimestamp(alice, startTsX + registry.duration()), gPay);
+            assertEq(registry.getPartnerAtTimestamp(alice, startTsX), address(0));
+            assertEq(registry.getPartnerAtTimestamp(alice, startTsX + registry.duration()), gPay);
             assertEq(nextStartTimestamp, endTs + 1);
         } else {
             // if startTsX > first period
-            (uint256 startTimestampX, uint256 endTimestampX) = registry.getPeriodAtTimestamp(startTsX);
-            assertEq(registry.getSinglePartnerAtTimestamp(alice, 1), address(0));
-            assertEq(registry.getSinglePartnerAtTimestamp(alice, 8), zeal);
-            assertEq(registry.getSinglePartnerAtTimestamp(alice, uint96(endTimestampX)), zeal);
-            assertEq(registry.getSinglePartnerAtTimestamp(alice, uint96(endTimestampX + 1)), gPay);
+            (, uint256 endTimestampX) = registry.getPeriodAtTimestamp(startTsX);
+            assertEq(registry.getPartnerAtTimestamp(alice, 1), address(0));
+            assertEq(registry.getPartnerAtTimestamp(alice, 8), zeal);
+            assertEq(registry.getPartnerAtTimestamp(alice, uint96(endTimestampX)), zeal);
+            assertEq(registry.getPartnerAtTimestamp(alice, uint96(endTimestampX + 1)), gPay);
             assertEq(nextStartTimestamp, uint96(endTimestampX + 1));
         }
 
-        // // alice -> [{zeal, 8}, {gPay, endTimestampX + 1}]
+        // alice -> [{zeal, 8}, {gPay, endTimestampX + 1}]
 
-        // // bob
-        // // ===================== startTsY=====================
+        // ===================== startTsY=====================
 
         vm.warp(startTsY);
 
         vm.prank(bob);
         nextStartTimestamp = registry.setPartnerForNextPeriod(bob, gApp);
         assertEq(nextStartTimestamp, endTimestampY + 1);
-        assertEq(registry.getSinglePartnerAtTimestamp(bob, uint96(endTimestampY)), address(0)); // will return address(0) when user don't set the partner
-        assertEq(registry.getSinglePartnerAtTimestamp(bob, uint96(endTimestampY) + 1), gApp);
+        assertEq(registry.getPartnerAtTimestamp(bob, uint96(endTimestampY)), address(0)); // will return address(0) when user don't set the partner
+        assertEq(registry.getPartnerAtTimestamp(bob, uint96(endTimestampY) + 1), gApp);
 
         vm.prank(alice);
         nextStartTimestamp = registry.setPartnerForNextPeriod(alice, gApp);
-        assertEq(registry.getSinglePartnerAtTimestamp(alice, uint96(endTimestampY) + 1), gApp);
+        assertEq(registry.getPartnerAtTimestamp(alice, uint96(endTimestampY) + 1), gApp);
 
         vm.prank(chris);
         nextStartTimestamp = registry.setPartnerForNextPeriod(chris, gApp);
-        assertEq(registry.getSinglePartnerAtTimestamp(chris, uint96(endTimestampY) + 1), gApp);
+        assertEq(registry.getPartnerAtTimestamp(chris, uint96(endTimestampY) + 1), gApp);
 
         // bob, chris -> [{gApp,endTimestampY + 1}}]
         // alice -> [{zeal, 1}, {gPay, endTimestampX + 1}}, {gApp, endTimestampY + 1}}]
@@ -151,34 +150,41 @@ contract CashbackRegistryTest is Test {
         users[0] = alice;
         users[1] = bob;
         users[2] = chris;
-        address[] memory usersForGApp = registry.getUsersAtPeriodForPartner(users, gApp, uint96(endTimestampY) + 1);
+        address[] memory usersForGApp = registry.getUsersAtTimestampForPartner(users, gApp, uint96(endTimestampY) + 1);
 
         assertEq(usersForGApp[0], alice);
         assertEq(usersForGApp[1], bob);
         assertEq(usersForGApp[2], chris);
         assertEq(usersForGApp.length, 3);
 
-        usersForGApp = registry.getUsersAtPeriodForPartner(users, gApp, uint96(endTimestampY) + 1);
-
         assertEq(usersForGApp.length, 3);
 
-        // | X   |  Y   {setDuration} |    Z    |
+        // test duration is changed
         vm.prank(admin);
         registry.setDuration(newDuration);
 
         vm.warp(startTsZ);
-        (uint256 startTimestampZ, uint256 endTimestampZ) = registry.getPeriodAtTimestamp(startTsZ);
+        (, uint256 endTimestampZ) = registry.getPeriodAtTimestamp(startTsZ);
 
         vm.prank(alice);
         nextStartTimestamp = registry.setPartnerForNextPeriod(alice, gPay);
 
         assertEq(nextStartTimestamp, endTimestampZ + 1);
-        assertEq(registry.getSinglePartnerAtTimestamp(alice, uint96(nextStartTimestamp)), gPay);
+        assertEq(registry.getPartnerAtTimestamp(alice, uint96(nextStartTimestamp)), gPay);
 
         vm.warp(nextStartTimestamp);
         (startTs, endTs) = registry.getCurrentPeriod();
         assertEq(startTs, nextStartTimestamp);
         assertEq(endTs, startTs + newDuration - 1);
+
+        users[0] = alice;
+        users[1] = bob;
+        users[2] = chris;
+        usersForGApp = registry.getUsersAtTimestampForPartner(users, gApp, uint96(endTimestampZ) + 1);
+
+        assertEq(usersForGApp[0], bob);
+        assertEq(usersForGApp[1], chris);
+        assertEq(usersForGApp.length, 2);
     }
 
     function testRegisterPartner() public {
@@ -189,30 +195,31 @@ contract CashbackRegistryTest is Test {
         vm.prank(admin);
         registry.registerPartner(gApp);
         assertTrue(registry.isPartnerRegistered(gApp));
-        assertFalse(registry.isPartnerRegistered(gPay));
 
         vm.prank(admin);
         registry.unregisterPartner(zeal);
         assertFalse(registry.isPartnerRegistered(zeal));
 
-        vm.prank(zeal);
-        vm.expectRevert();
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(CashbackRegistry.PartnerIsNotRegistered.selector, zeal));
         registry.unregisterPartner(zeal);
     }
 
-    function testAdmin(address partner1, address partner2, uint96 newDuration, uint32 timestampDiff) public {
-        // only admin can register or unregister partner
+    function testAdmin(address partner1, address partner2, uint96 newDuration, uint64 timestampDiff) public {
         vm.assume(
             partner1 != address(0) && partner2 != address(0) && partner1 != SENTINEL_20 && partner2 != SENTINEL_20
         );
         vm.assume(newDuration > 1 && newDuration != registry.duration() && newDuration < type(uint64).max);
+
+        vm.assume(registry.startTimestamp() + timestampDiff < type(uint64).max);
+
         vm.prank(admin);
         registry.registerPartner(partner1);
 
         assertTrue(registry.isPartnerRegistered(partner1));
         if (partner1 == partner2) {
             vm.prank(admin);
-            vm.expectRevert();
+            vm.expectRevert(abi.encodeWithSelector(CashbackRegistry.PartnerAlreadyRegistered.selector, partner1));
             registry.registerPartner(partner2);
         } else {
             vm.prank(admin);
@@ -223,18 +230,19 @@ contract CashbackRegistryTest is Test {
         // unregister partner1
 
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert(CashbackRegistry.OnlyAdmin.selector);
         registry.unregisterPartner(partner1);
 
-        // admin can bootstrap user's partner list
+        // only admin can bootstrap user's partner list
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(CashbackRegistry.InvalidCaller.selector, alice));
         registry.setPartnerForNextPeriod(bob, partner1);
 
         vm.prank(admin);
         registry.setPartnerForNextPeriod(bob, partner1);
+        assertEq(partner1, registry.getPartnerAtTimestamp(bob, uint96(block.timestamp) + registry.duration()));
 
-        // Test set duration
+        // Test set new duration
 
         uint96 originalDuration = registry.duration();
         uint256 originalStartTimestamp = registry.startTimestamp();
@@ -246,34 +254,32 @@ contract CashbackRegistryTest is Test {
         assertEq(registry.lastStartTimestampBeforeDurationChange(), originalStartTimestamp);
         assertEq(registry.duration(), newDuration);
 
-        vm.warp(registry.startTimestamp() - 1); // at the endTimestamp of the previous duration
+        vm.warp(registry.startTimestamp() - 1); // at the endTimestamp of the previous period
 
         (uint256 startTimestamp, uint256 endTimestamp) = registry.getPeriodAtTimestamp(uint96(block.timestamp));
-        assertEq(endTimestamp, registry.startTimestamp() - 1, "1");
-        assertEq(startTimestamp, endTimestamp - registry.lastDurationBeforeDurationChange() + 1, "2");
-        vm.assume(registry.startTimestamp() + timestampDiff < type(uint96).max);
+        assertEq(endTimestamp, registry.startTimestamp() - 1);
+        assertEq(startTimestamp, endTimestamp - registry.lastDurationBeforeDurationChange() + 1);
 
         // Warp to timestamp where new duration is used
         vm.warp(registry.startTimestamp() + timestampDiff);
+
+        (startTimestamp, endTimestamp) = registry.getCurrentPeriod();
 
         // calculate the start,end timestamp
         (, uint256 r) = _getQuotientResidue((block.timestamp - registry.startTimestamp()), registry.duration());
 
         if (r == 0) {
             // when timestamp is at divisible, then it is at startTimestamp
-            startTimestamp = block.timestamp;
-            endTimestamp = block.timestamp + registry.duration() - 1;
+            assertEq(startTimestamp, block.timestamp);
+            assertEq(endTimestamp, block.timestamp + registry.duration() - 1);
         } else {
             // if not divisible, timestamp is can either 1) be in the middle, or 2) at the end timestamp
-            startTimestamp = block.timestamp - r;
-            endTimestamp = startTimestamp + registry.duration() - 1;
+            assertEq(startTimestamp, block.timestamp - r);
+            assertEq(endTimestamp, startTimestamp + registry.duration() - 1);
         }
-        (uint256 startTimestampFromRead, uint256 endTimestampFromRead) = registry.getCurrentPeriod();
-        // New duration is used for calculation
-        assertEq(startTimestamp, startTimestampFromRead);
-        assertEq(endTimestamp, endTimestampFromRead);
     }
 
+    // Helper function
     function _getQuotientResidue(uint256 number, uint256 d)
         internal
         pure

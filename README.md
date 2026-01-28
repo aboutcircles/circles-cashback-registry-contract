@@ -174,72 +174,42 @@ subgraph Admin["👑 Admin Workflow"]
 
 ## Glossary:
 
-1. Period: the period of cashback, the start and end timestamp of a period is determined by `[STAET*TIMESTAMP + PERIOD * DURATION, START*TIMESTAMP + (PERIOD+1) * DURATION)`.Within a period, user can choose for their partner for the next period.
+1.  **Period**: A time interval for cashback calculations. A period is defined by a `startTimestamp` and `endTimestamp`. Users select partners for the _next_ period.
+2.  **Partner (address)**: A cashback partner, which must be registered by the admin.
+3.  **User (address)**: A user who can select a cashback partner.
 
-2. Partner (address): the cashback partner, should be registered by admin
+## State Variables
 
-3. User (address): GnosisPay user who can choose for cashback partner.
+- `startTimestamp`: `uint96` - The timestamp when the current set of periods began.
+- `duration`: `uint96` - The duration of each period in seconds.
+- `ADMIN`: `address` - The administrator of the contract.
+- `partnerChangeLog`: `mapping(address user => mapping(bytes32 => bytes32))` - A linked list for each user, storing their history of partner selections. The key `bytes32` packs the partner address and the start timestamp of the period.
+- `partnerList`: `mapping(address partner => address nextPartner)` - A linked list of registered partners.
+- `lastDurationBeforeDurationChange`: `uint96` - Stores the previous duration when `setDuration` is called.
+- `lastStartTimestampBeforeDurationChange`: `uint96` - Stores the previous start timestamp when `setDuration` is called.
 
-## state variable
+## Events
 
-1. `mapping(address user ⇒ mapping(bytes32 head ⇒ bytes32 next)) partnerChangeLog`: A history of user's partner
+- `event PartnerRegisteredForPeriod(address indexed user, address indexed partner, uint256 indexed startTimestampOfPeriod);`
+- `event NewPartnerRegistered(address indexed partner);`
+- `event PartnerUnregistered(address indexed partner);`
+- `event DurationUpdated(uint96 indexed newDuration, uint96 indexed oldDuration);`
 
-2. `mapping(address partner ⇒ address nextPartner) partnerList`
+## View Functions
 
-3. `uint96 START_TIMESTAMP` : start timestamp of the first period
+- `getPeriodAtTimestamp(uint96 timestamp) returns (uint256 _startTimestamp, uint256 _endTimestamp)`: Returns the start and end timestamp of the period for a given timestamp.
+- `getCurrentPeriod() returns (uint256 _startTimestamp, uint256 _endTimestamp)`: Returns the start and end timestamp of the current period.
+- `getPartnerAtTimestamp(address user, uint96 timestamp) returns (address partner)`: Returns a user's partner at a specific timestamp.
+- `getPartnerAtTimestamp(address[] memory user, uint96 timestamp) returns (address[] partners)`: Returns partners for multiple users at a specific timestamp.
+- `isPartnerRegistered(address partner) view returns (bool)`: Checks if a partner is registered.
+- `getUsersAtTimestampForPartner(address[] memory user, address partner, uint96 timestamp) returns (address[] users)`: Filters a list of users to find those associated with a specific partner at a given timestamp.
 
-4. `uint96 DURATION`: duration of one period
+## External Functions
 
-5. `address ADMIN` : admin of the contract
-
-## Event
-
-1. `event PartnerRegisteredForPeriod(address indexed user, address indexed partner, uint256 indexed startTimestampOfPeriod);`
-
-2. `event NewPartnerRegistered(address indexed partner);`
-
-3. `event PartnerUnregistered(address indexed partner);`
-
-## view function
-
-1. `getPeriodAtTimestamp(uint256 timestamp) returns (uint96 period)`
-
-2. `getCurrentPeriod() returns (uint96 period)`
-
-3. `getStartEndTimestampForPeriod(uint96 period) public view returns (uint256 startTimestamp, uint256 endTimestamp)`
-
-4. `getPartnerAtPeriod(address user, uint96 period) returns (address partner)`: returns user's corresponding partner at period
-
-5. `getPartnerAtPeriod(address[] memory user, uint96 period) returns (address[] partners)`
-
-6. `isPartnerRegistered(address partner) view returns (bool)`
-
-7. `getUsersAtPeriodForPartner(address[] memory user,address partner, uint96 period) returns(address[] users)`
-
-## external function
-
-1. `registerPartner(address partner) onlyAdmin`
-
-   1. push to linked list
-
-   2. set isPartnerRegistered as true
-
-   3. emit NewPartnerRegistered
-
-2. `unregisterPartner(address partner)`
-
-   1. remove from linked list and set isPartnerRegistered to false
-
-   2. emit PartnerUnregistered
-
-3. `setPartnerForNextPeriod(address user, address partner) returns (uint256 nextStartTimestamp` : Main function to update partner for user
-
-   1. Add the {partner+startPeriod} into partnerChangeLog linked list
-
-   2. Case 1(bootstrap phase): Called by user to register their first partner: Partner will be taken affect starting from next Period
-   3. Case 2(bootstrap phase): Called by admin to register user's first partner: Partner will be taken affect starting from the current period:
-   4. Case 3: If user has already chosen the partner for next period, but want to switch to a different partner: The head of the partnerChangeLog linked list is updated
-   5. Case 4: User wants to update their partner for the next period: Add new partnerWithPeriod node into the partnerChangeLog linked list
+- `registerPartner(address partner) onlyAdmin`: Registers a new partner.
+- `unregisterPartner(address partner) onlyAdmin`: Unregisters an existing partner.
+- `setPartnerForNextPeriod(address user, address partner) returns (uint256 nextStartTimestamp)`: Allows a user or admin to set the partner for a future period.
+- `setDuration(uint96 _duration) onlyAdmin`: Updates the duration of periods.
 
 ## Workflow
 
