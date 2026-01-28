@@ -97,10 +97,11 @@ contract CashbackRegistry {
             ? (lastStartTimestampBeforeDurationChange, lastDurationBeforeDurationChange)
             : (startTimestamp, duration);
 
-        (, uint256 r) = getQuotientResidue((timestamp - startTimestampForDuration), durationForCalculation);
+        (, uint256 r) = _getQuotientResidue((timestamp - startTimestampForDuration), durationForCalculation);
 
         if (r == 0) {
             // when timestamp is at divisible, then it is at startTimestamp
+
             _startTimestamp = timestamp;
             _endTimestamp = timestamp + durationForCalculation - 1;
         } else {
@@ -110,7 +111,11 @@ contract CashbackRegistry {
         }
     }
 
-    function getQuotientResidue(uint256 number, uint256 d) internal pure returns (uint256 quotient, uint256 remainder) {
+    function _getQuotientResidue(uint256 number, uint256 d)
+        internal
+        pure
+        returns (uint256 quotient, uint256 remainder)
+    {
         quotient = number / d;
         remainder = number == (quotient * d) ? 0 : number - (quotient * d);
     }
@@ -124,9 +129,9 @@ contract CashbackRegistry {
 
     /// @notice Gets the partner for a given user at a specific period.
     /// @param _user The user's address.
-    /// @param _startTimestamp The period number.
+    /// @param _timestamp The period number.
     /// @return partner The partner's address.
-    function getPartnerAtPeriod(address _user, uint96 _startTimestamp) public view returns (address partner) {
+    function getSinglePartnerAtTimestamp(address _user, uint96 _timestamp) public view returns (address partner) {
         assembly {
             // Calculate storage slot of partnerChangeLog[user]
             let userKey := mload(0x40)
@@ -144,8 +149,8 @@ contract CashbackRegistry {
                 let lastStartTimestamp := and(lastPartnerWithStartTimestamp, 0xffffffffffffffffffffffff)
                 let lastPartner := shr(96, lastPartnerWithStartTimestamp)
 
-                // if _startTimestamp >= lastStartTimestamp
-                if iszero(lt(_startTimestamp, lastStartTimestamp)) {
+                // if _timestamp >= lastStartTimestamp
+                if iszero(lt(_timestamp, lastStartTimestamp)) {
                     partner := lastPartner
                     break
                 }
@@ -162,12 +167,16 @@ contract CashbackRegistry {
 
     /// @notice Gets the partners for a list of users at a specific period.
     /// @param user An array of user addresses.
-    /// @param period The period number.
+    /// @param _timestamp The _timestamp number.
     /// @return partners An array of partner addresses corresponding to the users.
-    function getPartnerAtPeriod(address[] memory user, uint96 period) public view returns (address[] memory partners) {
+    function getPartnerAtTimestamp(address[] memory user, uint96 _timestamp)
+        public
+        view
+        returns (address[] memory partners)
+    {
         partners = new address[](user.length);
         for (uint256 i; i < user.length; i++) {
-            address partner = getPartnerAtPeriod(user[i], period);
+            address partner = getSinglePartnerAtTimestamp(user[i], _timestamp);
             partners[i] = partner;
         }
         return partners;
@@ -319,7 +328,7 @@ contract CashbackRegistry {
         _endTimestamp = msg.sender == ADMIN ? _endTimestamp : startTimestamp + duration - 1;
 
         // store the startTimestamp of the period
-        bytes32 partnerWithStartTimestamp = _getPartnerWithStartTimestamp(_partner, uint96(startTimestamp));
+        bytes32 partnerWithStartTimestamp = _getPartnerWithStartTimestamp(_partner, uint96(_startTimestamp));
 
         bytes32 head = partnerChangeLog[_user][SENTINEL_32];
         if (head == bytes32(0)) {
@@ -346,18 +355,19 @@ contract CashbackRegistry {
             partnerChangeLog[_user][SENTINEL_32] = partnerWithStartTimestamp;
         }
 
-        emit PartnerRegisteredForPeriod(_user, _partner, startTimestamp);
-        return startTimestamp;
+        emit PartnerRegisteredForPeriod(_user, _partner, _startTimestamp);
+        return _startTimestamp;
     }
 
     function setDuration(uint96 _duration) external onlyAdmin {
         lastDurationBeforeDurationChange = duration;
         lastStartTimestampBeforeDurationChange = startTimestamp;
 
-        duration = _duration;
         (, uint256 _endTimestamp) = getCurrentPeriod();
 
         startTimestamp = uint96(_endTimestamp + 1); // the next start timestamp is the endTimestamp of the last duration + 1
+
+        duration = _duration;
         emit DurationUpdated(duration, lastDurationBeforeDurationChange);
     }
 
